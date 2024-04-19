@@ -2,7 +2,6 @@ package repo
 
 import (
 	"fmt"
-	"github.com/pkg/errors"
 	"github.com/sanurb/ghpm/internal/github"
 	"os"
 	"os/exec"
@@ -12,7 +11,7 @@ import (
 func CloneRepos() error {
 	repos, err := github.FetchUserRepos(nil)
 	if err != nil {
-		return errors.Wrap(err, "failed to fetch user repos")
+		return fmt.Errorf("failed to fetch user repos: %w", err)
 	}
 
 	for _, repo := range repos {
@@ -31,14 +30,16 @@ func CloneRepos() error {
 func SetSSHRemote() error {
 	repos, err := github.FetchUserRepos(nil)
 	if err != nil {
-		return errors.Wrap(err, "failed to fetch user repos")
+		return fmt.Errorf("failed to fetch user repos: %w", err)
 	}
 
 	for _, repo := range repos {
-		fmt.Printf("Setting SSH remote for %s...\n", repo)
-		cmd := exec.Command("git", "-C", repo, "remote", "set-url", "origin", fmt.Sprintf("git@github.com:%s/%s.git", "USERNAME", repo)) // USERNAME debe ser dinámico
+		repoName := filepath.Base(repo)
+		fmt.Printf("Setting SSH remote for %s...\n", repoName)
+		repoPath := filepath.Join("path_to_repos", repoName)
+		cmd := exec.Command("git", "-C", repoPath, "remote", "set-url", "origin", fmt.Sprintf("git@github.com:%s/%s.git", github.GetUsername(), repoName))
 		if err := cmd.Run(); err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to set SSH remote for %s: %v\n", repo, err)
+			fmt.Fprintf(os.Stderr, "Failed to set SSH remote for %s: %v\n", repoName, err)
 			continue
 		}
 	}
@@ -50,12 +51,12 @@ func SetSSHRemote() error {
 func ExecuteInRepos(command string) error {
 	repos, err := github.FetchUserRepos(nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to execute command in repositories: %w", err)
 	}
 
 	for _, repo := range repos {
 		fmt.Printf("Executing command in %s...\n", repo)
-		repoPath := filepath.Join("path_to_repos", filepath.Base(repo)) // Asumir un path base para repositorios
+		repoPath := filepath.Join("path_to_repos", filepath.Base(repo))
 		cmd := exec.Command("sh", "-c", fmt.Sprintf("cd %s && %s", repoPath, command))
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
@@ -72,7 +73,7 @@ func ExecuteInRepos(command string) error {
 func CloneOthersRepos(username string) error {
 	repos, err := github.FetchUserRepos(&username)
 	if err != nil {
-		return errors.Wrap(err, "failed to fetch user repos")
+		return fmt.Errorf("failed to fetch repos for user %s: %w", username, err)
 	}
 
 	for _, repo := range repos {

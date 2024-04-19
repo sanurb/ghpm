@@ -3,7 +3,6 @@ package github
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/pkg/errors"
 	"github.com/sanurb/ghpm/internal/user"
 	"net/http"
 )
@@ -13,13 +12,13 @@ func FetchUserRepos(username *string) ([]string, error) {
 	if username != nil {
 		effectiveUsername = *username
 	} else {
-		effectiveUsername = user.GetUsername()
+		effectiveUsername = GetUsername()
 	}
 
 	url := fmt.Sprintf("https://api.github.com/users/%s/repos", effectiveUsername)
 	resp, err := http.Get(url)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to fetch repositories")
+		return nil, fmt.Errorf("failed to fetch repositories: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -27,7 +26,7 @@ func FetchUserRepos(username *string) ([]string, error) {
 		HTMLURL string `json:"html_url"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&repos); err != nil {
-		return nil, errors.Wrap(err, "failed to decode response")
+		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
 	repoURLs := make([]string, len(repos))
@@ -36,4 +35,8 @@ func FetchUserRepos(username *string) ([]string, error) {
 	}
 
 	return repoURLs, nil
+}
+
+func GetUsername() string {
+	return user.GetUsername()
 }
