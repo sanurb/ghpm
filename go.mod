@@ -1,4 +1,4 @@
-module github.com/sanurb/ghmp
+module github.com/sanurb/ghpm
 
 go 1.22
 

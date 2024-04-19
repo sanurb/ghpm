@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/pkg/errors"
-	"github.com/sanurb/ghmp/internal/user"
+	"github.com/sanurb/ghpm/internal/user"
 	"net/http"
 )
 

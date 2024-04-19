@@ -1,6 +1,6 @@
 package command
 
-import "github.com/sanurb/ghmp/internal/repo"
+import "github.com/sanurb/ghpm/internal/repo"
 
 type Command interface {
 	Execute() error

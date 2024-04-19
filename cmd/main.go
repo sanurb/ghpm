@@ -7,9 +7,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/sanurb/ghmp/internal/command"
-	"github.com/sanurb/ghmp/internal/ui"
-	"github.com/sanurb/ghmp/internal/user"
+	"github.com/sanurb/ghpm/internal/command"
+	"github.com/sanurb/ghpm/internal/ui"
+	"github.com/sanurb/ghpm/internal/user"
 )
 
 func main() {

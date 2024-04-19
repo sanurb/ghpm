@@ -3,7 +3,7 @@ package repo
 import (
 	"fmt"
 	"github.com/pkg/errors"
-	"github.com/sanurb/ghmp/internal/github"
+	"github.com/sanurb/ghpm/internal/github"
 	"os"
 	"os/exec"
 	"path/filepath"
