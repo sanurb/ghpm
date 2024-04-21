@@ -20,6 +20,8 @@
 <a href="https://github.com/sanurb/ghpm/pulse">
 <img alt="Last Updated" src="https://img.shields.io/github/last-commit/sanurb/ghpm?style=flat&color=e06c75&label="> </a>
 
+<img alt="report" src="https://goreportcard.com/badge/github.com/sanurb/ghpm">
+
 <h3>A GitHub Project Manager 🧑‍💻⚙️</h3>
 
 <figure>
