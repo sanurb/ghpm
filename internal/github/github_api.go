@@ -7,7 +7,13 @@ import (
 	"net/http"
 )
 
-func FetchUserRepos(username *string) ([]string, error) {
+type RepoInfo struct {
+	HTMLURL   string `json:"html_url"`
+	UpdatedAt string `json:"updated_at"`
+	PushedAt  string `json:"pushed_at"`
+}
+
+func FetchUserRepos(username *string) ([]RepoInfo, error) {
 	var effectiveUsername string
 	if username != nil {
 		effectiveUsername = *username
@@ -22,19 +28,12 @@ func FetchUserRepos(username *string) ([]string, error) {
 	}
 	defer resp.Body.Close()
 
-	var repos []struct {
-		HTMLURL string `json:"html_url"`
-	}
+	var repos []RepoInfo
 	if err := json.NewDecoder(resp.Body).Decode(&repos); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
-	repoURLs := make([]string, len(repos))
-	for i, repo := range repos {
-		repoURLs[i] = repo.HTMLURL
-	}
-
-	return repoURLs, nil
+	return repos, nil
 }
 
 func GetUsername() string {

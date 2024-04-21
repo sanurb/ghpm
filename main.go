@@ -10,6 +10,7 @@ import (
 	"github.com/sanurb/ghpm/internal/command"
 	"github.com/sanurb/ghpm/internal/ui"
 	"github.com/sanurb/ghpm/internal/user"
+	"github.com/sanurb/ghpm/internal/util"
 )
 
 func main() {
@@ -18,7 +19,13 @@ func main() {
 	help := flagSet.Bool("h", false, "Display this help message")
 
 	commandActions := map[string]func() command.Command{
-		"1": func() command.Command { return &command.CloneCommand{} },
+		"1": func() command.Command {
+			if util.ConfirmAction("Filter by recent activity?") {
+				days := util.GetDaysFromUser()
+				return &command.FilteredCloneCommand{Days: days}
+			}
+			return &command.CloneCommand{}
+		},
 		"2": func() command.Command { return &command.CloneOthersCommand{} },
 		"3": func() command.Command { return &command.RunCommand{} },
 		"4": func() command.Command { return &command.SetSSHCommand{} },
