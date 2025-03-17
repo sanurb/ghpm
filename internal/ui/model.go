@@ -10,10 +10,12 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
+	zone "github.com/lrstanley/bubblezone" // bubblezone
+
 	"github.com/sanurb/ghpm/internal/github"
 )
 
-// --- Application States ---
+// States
 const (
 	StateWelcome = iota
 	StateMenu
@@ -23,10 +25,10 @@ const (
 	StateRepoList
 	StateDone
 	StateInput
-	StateDownloading // NEW: for the multi-download progress bar
+	StateDownloading
 )
 
-// --- Messages ---
+// Custom messages
 type (
 	reposMsg []github.Repo
 	orgsMsg  []github.Org
@@ -35,7 +37,7 @@ type (
 
 func (e errMsg) Error() string { return e.err.Error() }
 
-// We itemize each repository in the list.
+// Your item for the Bubble Tea list
 type repoItem struct {
 	name   string
 	sshUrl string
@@ -45,7 +47,6 @@ func (r repoItem) Title() string       { return r.name }
 func (r repoItem) Description() string { return r.sshUrl }
 func (r repoItem) FilterValue() string { return r.name }
 
-// Key bindings
 type keyMap struct {
 	Quit     key.Binding
 	Help     key.Binding
@@ -76,7 +77,6 @@ func defaultKeyMap() keyMap {
 	}
 }
 
-// TuiModel is our Bubble Tea model.
 type TuiModel struct {
 	state int
 
@@ -85,7 +85,7 @@ type TuiModel struct {
 	menuOptions []string
 	menuCursor  int
 
-	repoList list.Model
+	repoList list.Model // from bubbletea/bubbles
 	repos    []github.Repo
 
 	operation   string
@@ -101,19 +101,24 @@ type TuiModel struct {
 	helpModel help.Model
 	keys      keyMap
 
-	// NEW: for multi-repo download progress
 	progress       progress.Model
-	downloading    bool     // are we in the middle of a multi-clone?
-	downloadIndex  int      // how many done so far
-	downloadTarget int      // how many total
-	downloadRepos  []string // store the repo names for display
+	downloading    bool
+	downloadIndex  int
+	downloadTarget int
+	downloadRepos  []string
 	done           bool
+
+	width    int
+	height   int
+	showHelp bool
+
+	pageSize int // param for stable items/page
 }
 
-// NewTuiModel initializes our TUI, starting with a welcome screen (optional).
-func NewTuiModel() TuiModel {
+// NewTuiModel is your entry. "perPage" is user-supplied, e.g. 10
+func NewTuiModel(perPage int) TuiModel {
 	sp := spinner.New()
-	sp.Style = DownloadSpinnerStyle // from styles.go
+	sp.Style = DownloadSpinnerStyle
 
 	menu := []string{
 		"Clone Own Repos",
@@ -124,15 +129,16 @@ func NewTuiModel() TuiModel {
 		"Exit",
 	}
 
+	// Create the official list Model
 	repoList := list.New(nil, list.NewDefaultDelegate(), 50, 10)
 	repoList.Title = "Repositories"
+	repoList.SetFilteringEnabled(true)
 	repoList.SetShowHelp(true)
 	repoList.SetShowStatusBar(false)
-	repoList.SetFilteringEnabled(true)
 	repoList.SetShowPagination(true)
-	repoList.Paginator.PerPage = 10
+	// We'll forcibly fix the page size after the library tries to recalc, so:
+	repoList.Paginator.PerPage = perPage
 
-	// NEW: Setup a progress bar for multi download
 	p := progress.New(
 		progress.WithDefaultGradient(),
 		progress.WithWidth(40),
@@ -146,16 +152,17 @@ func NewTuiModel() TuiModel {
 		repoList:    repoList,
 		helpModel:   help.New(),
 		keys:        defaultKeyMap(),
-
-		progress: p,
+		progress:    p,
+		pageSize:    perPage,
 	}
 }
 
+// Init starts your spinner
 func (m TuiModel) Init() tea.Cmd {
-	// spinner tick, or do multiple if needed
 	return tea.Batch(m.sp.Tick)
 }
 
+// Update references your specialized update methods in update.go
 func (m TuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch m.state {
 	case StateWelcome:
@@ -170,56 +177,59 @@ func (m TuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateRepoFetch(msg)
 	case StateRepoList:
 		return m.updateRepoList(msg)
-	case StateDownloading: // NEW
+	case StateDownloading:
 		return m.updateDownloading(msg)
 	case StateDone:
 		return m.updateDone(msg)
 	case StateInput:
 		return m.updateInput(msg)
-	default:
-		return m, nil
 	}
+	return m, nil
 }
 
+// The final view: we wrap the result in zone.Scan() for bubblezone
 func (m TuiModel) View() string {
+	var out string
 	switch m.state {
 	case StateWelcome:
-		return m.renderWelcome()
+		out = m.renderWelcome()
 	case StateMenu:
-		return m.renderMenu()
+		out = m.renderMenu()
 	case StateOrgFetch:
-		return fmt.Sprintf("Fetching organizations... %s", m.sp.View())
+		out = fmt.Sprintf("Fetching organizations... %s", m.sp.View())
 	case StateOrgSelect:
 		if m.orgSelectForm == nil {
-			return "No org selection form yet!"
+			out = "No org selection form yet!"
+		} else {
+			out = m.orgSelectForm.View()
 		}
-		return m.orgSelectForm.View()
 	case StateRepoFetch:
-		return fmt.Sprintf("Fetching repositories... %s", m.sp.View())
+		out = fmt.Sprintf("Fetching repositories... %s", m.sp.View())
 	case StateRepoList:
-		return m.repoList.View()
-	case StateDownloading: // show spinner + progress
-		return m.renderDownloading()
+		out = m.repoList.View()
+	case StateDownloading:
+		out = m.renderDownloading()
 	case StateDone:
-		return m.message + "\nPress any key to return to menu."
+		out = m.message + "\nPress any key to return to menu."
 	case StateInput:
-		return "Input:\n" + m.inputForm.View()
+		out = "Input:\n" + m.inputForm.View()
 	default:
-		return "(unknown state)"
+		out = "(unknown state)"
 	}
+
+	// bubblezone strips zero-width markers
+	return zone.Scan(out)
 }
 
-// A simple welcome screen
 func (m TuiModel) renderWelcome() string {
 	boxContent := "Welcome to GHPM!\n\n" +
 		"Manage GitHub repositories, clone your org repos,\n" +
 		"run commands across all repos, and configure SSH remotes.\n\n" +
 		"Press any key to begin."
-
 	return WelcomeBoxStyle.Render(boxContent)
 }
 
-// A basic menu rendering
+// We'll bubblezone-mark each line so we can detect mouse clicks
 func (m TuiModel) renderMenu() string {
 	view := "Select an option:\n\n"
 	for i, option := range m.menuOptions {
@@ -227,27 +237,25 @@ func (m TuiModel) renderMenu() string {
 		if i == m.menuCursor {
 			cursor = "> "
 		}
-		view += fmt.Sprintf("%s%s\n", cursor, option)
+		lineID := fmt.Sprintf("menu-%d", i)
+		marked := zone.Mark(lineID, fmt.Sprintf("%s%s", cursor, option))
+		view += marked + "\n"
 	}
 	return view
 }
 
-// NEW: display spinner + progress + "Currently Cloning: X"
 func (m TuiModel) renderDownloading() string {
 	if m.done {
 		return DoneStyle.Render(fmt.Sprintf("Done! Cloned %d repos.\n", m.downloadTarget))
 	}
 	spin := m.sp.View() + " "
-	// percent = m.downloadIndex / float64(m.downloadTarget)
 	bar := m.progress.View()
-
 	var repoName string
 	if m.downloadIndex < len(m.downloadRepos) {
 		repoName = m.downloadRepos[m.downloadIndex]
 	} else {
 		repoName = ""
 	}
-
 	info := "Cloning " + CurrentRepoStyle.Render(repoName)
 	return fmt.Sprintf("%s\n\n%s\n\n%s", spin+info, bar, "Press q/esc to exit")
 }

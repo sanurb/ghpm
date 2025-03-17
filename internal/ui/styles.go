@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -64,3 +65,20 @@ var DoneStyle = lipgloss.NewStyle().
 // An example style for the currently-downloading repo name.
 var CurrentRepoStyle = lipgloss.NewStyle().
 	Foreground(lipgloss.Color("211"))
+
+// ComputeTotalPages: fix for bubble list so total pages reflect items/perpage.
+func ComputeTotalPages(numItems, perPage int) int {
+	if perPage < 1 {
+		perPage = 1
+	}
+	pages := (numItems + perPage - 1) / perPage
+	if pages < 1 {
+		pages = 1
+	}
+	return pages
+}
+
+// For example, if you want to display "Page X/Y (Z items)"
+func PaginationView(currPage, totalPages, totalItems int) string {
+	return fmt.Sprintf("Page %d/%d  (%d items)", currPage, totalPages, totalItems)
+}

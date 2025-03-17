@@ -1,14 +1,20 @@
 package cmd
 
-import "github.com/spf13/cobra"
+import (
+	"fmt"
+
+	"github.com/spf13/cobra"
+)
 
 // rootCmd is the main Cobra command.
 var rootCmd = &cobra.Command{
 	Use:   "ghpm",
 	Short: "ghpm - GitHub Project Manager",
-	// When no subcommand is provided, launch the interactive UI.
+	// On no subcommand, launch the interactive TUI.
 	Run: func(cmd *cobra.Command, args []string) {
-		InteractiveCmd()
+		if err := InteractiveCmd(); err != nil {
+			fmt.Println("Error:", err)
+		}
 	},
 }
 
