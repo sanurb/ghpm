@@ -9,13 +9,11 @@ import (
 	"github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/huh"
 	zone "github.com/lrstanley/bubblezone"
-
 	"github.com/sanurb/ghpm/internal/github"
 )
 
-// States
+// TUI states
 const (
 	StateMenu = iota
 	StateOrgFetch
@@ -27,7 +25,6 @@ const (
 	StateDownloading
 )
 
-// Custom messages
 type (
 	reposMsg []github.Repo
 	orgsMsg  []github.Org
@@ -45,6 +42,7 @@ func (r repoItem) Title() string       { return r.name }
 func (r repoItem) Description() string { return r.sshUrl }
 func (r repoItem) FilterValue() string { return r.name }
 
+// Key bindings
 type keyMap struct {
 	Quit     key.Binding
 	Help     key.Binding
@@ -87,13 +85,12 @@ type TuiModel struct {
 	repos    []github.Repo
 
 	operation   string
-	inputForm   tea.Model
 	inputResult string
 	command     string
 	message     string
 
 	orgs          []github.Org
-	orgSelectForm *huh.Form
+	orgSelectForm tea.Model // non-blocking form for picking an org
 	selectedOrg   string
 
 	helpModel help.Model
@@ -112,7 +109,6 @@ type TuiModel struct {
 	pageSize int
 }
 
-// NewTuiModel sets up spinner, help, and the list with per-page
 func NewTuiModel(perPage int) TuiModel {
 	sp := spinner.New()
 	sp.Style = DownloadSpinnerStyle
@@ -141,8 +137,7 @@ func NewTuiModel(perPage int) TuiModel {
 	)
 
 	return TuiModel{
-		state: StateMenu,
-
+		state:       StateMenu,
 		sp:          sp,
 		menuOptions: menu,
 		repoList:    repoList,
@@ -153,47 +148,62 @@ func NewTuiModel(perPage int) TuiModel {
 	}
 }
 
-// Init starts the spinner
 func (m TuiModel) Init() tea.Cmd {
 	return tea.Batch(m.sp.Tick)
 }
 
-// Update delegates to specialized update methods
 func (m TuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width, m.height = msg.Width, msg.Height
+
+	// optional global key check
+	case tea.KeyMsg:
+		if key.Matches(msg, m.keys.Quit) {
+			return m, tea.Quit
+		}
+	}
+
+	// route to sub-updates
 	switch m.state {
 	case StateMenu:
-		return m.updateMenu(msg)
+		newM, cmd := m.updateMenu(msg)
+		return newM, cmd
 	case StateOrgFetch:
-		return m.updateOrgFetch(msg)
+		newM, cmd := m.updateOrgFetch(msg)
+		return newM, cmd
 	case StateOrgSelect:
-		return m.updateOrgSelect(msg)
+		newM, cmd := m.updateOrgSelect(msg)
+		return newM, cmd
 	case StateRepoFetch:
-		return m.updateRepoFetch(msg)
+		newM, cmd := m.updateRepoFetch(msg)
+		return newM, cmd
 	case StateRepoList:
-		return m.updateRepoList(msg)
+		newM, cmd := m.updateRepoList(msg)
+		return newM, cmd
 	case StateDownloading:
-		return m.updateDownloading(msg)
+		newM, cmd := m.updateDownloading(msg)
+		return newM, cmd
 	case StateDone:
-		return m.updateDone(msg)
-	case StateInput:
-		return m.updateInput(msg)
+		newM, cmd := m.updateDone(msg)
+		return newM, cmd
+	default:
+		return m, nil
 	}
-	return m, nil
 }
 
 func (m TuiModel) View() string {
 	var out string
-
 	switch m.state {
 	case StateMenu:
 		out = m.renderWelcomeAndMenu()
 	case StateOrgFetch:
 		out = fmt.Sprintf("Fetching organizations... %s", m.sp.View())
 	case StateOrgSelect:
-		if m.orgSelectForm == nil {
-			out = "No org selection form yet!"
-		} else {
+		if m.orgSelectForm != nil {
 			out = m.orgSelectForm.View()
+		} else {
+			out = "No org selection form yet!"
 		}
 	case StateRepoFetch:
 		out = fmt.Sprintf("Fetching repositories... %s", m.sp.View())
@@ -203,18 +213,16 @@ func (m TuiModel) View() string {
 		out = m.renderDownloading()
 	case StateDone:
 		out = m.message + "\nPress any key to return to menu."
-	case StateInput:
-		out = m.inputForm.View()
 	default:
 		out = "(unknown state)"
 	}
-
-	// Remove zone markers
-	return zone.Scan(out)
+	return zone.Scan(out) // remove zone markers
 }
 
+// Helpers
 func (m TuiModel) renderWelcomeAndMenu() string {
-	welcome := "Welcome to GHPM!\n\nManage GitHub repositories, clone your org repos,\n" +
+	welcome := "Welcome to GHPM!\n\n" +
+		"Manage GitHub repositories, clone your org repos,\n" +
 		"run commands across all repos, and configure SSH remotes.\n"
 
 	menu := "Select an option:\n\n"
@@ -224,8 +232,7 @@ func (m TuiModel) renderWelcomeAndMenu() string {
 			cursor = "> "
 		}
 		lineID := fmt.Sprintf("menu-%d", i)
-		marked := zone.Mark(lineID, fmt.Sprintf("%s%s", cursor, option))
-		menu += marked + "\n"
+		menu += zone.Mark(lineID, cursor+option) + "\n"
 	}
 
 	return WelcomeBoxStyle.Render(welcome) + "\n\n" + menu
@@ -235,14 +242,12 @@ func (m TuiModel) renderDownloading() string {
 	if m.done {
 		return DoneStyle.Render(fmt.Sprintf("Done! Cloned %d repos.\n", m.downloadTarget))
 	}
-	spin := m.sp.View() + " "
+	spin := m.sp.View()
 	bar := m.progress.View()
 	var repoName string
 	if m.downloadIndex < len(m.downloadRepos) {
 		repoName = m.downloadRepos[m.downloadIndex]
-	} else {
-		repoName = ""
 	}
 	info := "Cloning " + CurrentRepoStyle.Render(repoName)
-	return fmt.Sprintf("%s\n\n%s\n\n%s", spin+info, bar, "Press q/esc to exit")
+	return fmt.Sprintf("%s\n\n%s\n\nPress q/esc to exit\n", spin+" "+info, bar)
 }

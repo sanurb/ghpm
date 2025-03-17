@@ -14,6 +14,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
 	zone "github.com/lrstanley/bubblezone"
+
 	"github.com/sanurb/ghpm/internal/ghops"
 	"github.com/sanurb/ghpm/internal/github"
 )
@@ -29,41 +30,27 @@ func cloneRepoCmd(repoName string) tea.Cmd {
 
 func multiCloneAllCmd(repos []string) tea.Cmd {
 	if len(repos) == 0 {
-		return func() tea.Msg { return clonedRepoMsg("") }
+		return func() tea.Msg {
+			return clonedRepoMsg("")
+		}
 	}
 	return cloneRepoCmd(repos[0])
 }
 
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
 // =============== MENU ===============
-
-func (m TuiModel) updateMenu(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m TuiModel) updateMenu(msg tea.Msg) (TuiModel, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.width, m.height = msg.Width, msg.Height
-		return m, nil
-
-	case tea.MouseMsg:
-		if msg.Type == tea.MouseLeft && msg.Button == tea.MouseButtonLeft &&
-			msg.Action == tea.MouseActionRelease {
-			// check all lines
-			for i := range m.menuOptions {
-				lineID := fmt.Sprintf("menu-%d", i)
-				if zone.Get(lineID).InBounds(msg) {
-					m.menuCursor = i
-					return m.handleMenuChoice(i)
-				}
-			}
-		}
-
 	case tea.KeyMsg:
-		if key.Matches(msg, m.keys.Quit) {
-			return m, tea.Quit
-		}
-
 		switch msg.String() {
 		case "?":
 			m.showHelp = !m.showHelp
-			return m, nil
 		case "up", "k":
 			if m.menuCursor > 0 {
 				m.menuCursor--
@@ -75,77 +62,117 @@ func (m TuiModel) updateMenu(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			return m.handleMenuChoice(m.menuCursor)
 		}
+
+	case tea.MouseMsg:
+		// If user clicks a line
+		if msg.Type == tea.MouseLeft && msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionRelease {
+			for i := range m.menuOptions {
+				lineID := fmt.Sprintf("menu-%d", i)
+				if zone.Get(lineID).InBounds(msg) {
+					m.menuCursor = i
+					return m.handleMenuChoice(i)
+				}
+			}
+		}
 	}
 	return m, nil
 }
 
-// The user’s choice
-func (m TuiModel) handleMenuChoice(idx int) (tea.Model, tea.Cmd) {
+func (m TuiModel) handleMenuChoice(idx int) (TuiModel, tea.Cmd) {
 	switch m.menuOptions[idx] {
+
 	case "Clone Own Repos":
 		m.operation = "cloneOwn"
 		m.state = StateRepoFetch
 		return m, tea.Batch(
-			m.sp.Tick,                 // ensures the spinner is advanced
-			fetchReposCmd("self", ""), // triggers the GH fetch
+			m.sp.Tick,
+			fetchReposCmd("self", ""),
 		)
+
 	case "Clone Public Repos":
-		m.operation = "clonePublic"
-		// Validate that user typed a non-empty GitHub username:
-		selectField := huh.NewInput().
+		// This is the single blocking approach
+		// So no new state; we do it right here
+		usernamePtr := new(string)
+		err := huh.NewInput().
 			Title("Enter GitHub Username").
-			Key("username").
-			Validate(func(val string) error {
-				if strings.TrimSpace(val) == "" {
+			Validate(func(v string) error {
+				if strings.TrimSpace(v) == "" {
 					return fmt.Errorf("Username cannot be empty")
 				}
 				return nil
-			})
+			}).
+			Value(usernamePtr).
+			Run()
+		if err != nil {
+			m.message = "Input canceled or invalid"
+			m.state = StateDone
+			return m, nil
+		}
 
-		form := huh.NewForm(huh.NewGroup(selectField))
-		m.inputForm = form
-		initCmd := m.inputForm.Init()
-		m.state = StateInput
-		return m, initCmd
+		m.operation = "clonePublic"
+		m.state = StateRepoFetch
+		return m, tea.Batch(
+			m.sp.Tick,
+			fetchReposCmd("public", *usernamePtr),
+		)
 
 	case "Clone Repos from an Org":
+		// Non-blocking form approach
 		m.operation = "cloneOrg"
 		m.state = StateOrgFetch
 		return m, tea.Batch(
-			m.sp.Tick, // ensures the spinner is advanced
+			m.sp.Tick,
 			fetchOrgsCmd(),
 		)
 
 	case "Run Command in All Repos":
-		m.operation = "runCommand"
-		cmdField := huh.NewInput().
-			Title("Enter command").
-			Key("command").
-			Validate(func(val string) error {
-				if len(strings.TrimSpace(val)) == 0 {
+		// Also do a blocking input
+		cmdPtr := new(string)
+		err := huh.NewInput().
+			Title("Enter command to run").
+			Validate(func(v string) error {
+				if strings.TrimSpace(v) == "" {
 					return fmt.Errorf("Command cannot be empty")
 				}
 				return nil
-			})
+			}).
+			Value(cmdPtr).
+			Run()
+		if err != nil {
+			m.message = "Command input canceled or invalid"
+			m.state = StateDone
+			return m, nil
+		}
 
-		form := huh.NewForm(huh.NewGroup(cmdField))
-		m.inputForm = form
-		initCmd := m.inputForm.Init()
-		m.state = StateInput
-		return m, initCmd
+		// Fire off background
+		go ghops.RunCommandInAllRepos(".", *cmdPtr)
+		m.message = "Command executed in all repos."
+		m.state = StateDone
+		return m, nil
 
 	case "Set SSH Remote":
-		m.operation = "setSSH"
-		form := huh.NewForm(huh.NewGroup(
-			huh.NewInput().
-				Title("Enter GitHub Username").
-				Key("username"),
-		))
-		m.inputForm = form
-		initCmd := m.inputForm.Init()
+		// Also do a blocking input
+		usrPtr := new(string)
+		err := huh.NewInput().
+			Title("Enter GitHub Username").
+			Validate(func(v string) error {
+				if strings.TrimSpace(v) == "" {
+					return fmt.Errorf("Username cannot be empty")
+				}
+				return nil
+			}).
+			Value(usrPtr).
+			Run()
+		if err != nil {
+			m.message = "User input canceled or invalid"
+			m.state = StateDone
+			return m, nil
+		}
 
-		m.state = StateInput
-		return m, initCmd
+		go ghops.SetSSHRemote(".", *usrPtr)
+		m.message = "SSH remote set for all repos."
+		m.state = StateDone
+		return m, nil
 
 	case "Exit":
 		return m, tea.Quit
@@ -154,15 +181,16 @@ func (m TuiModel) handleMenuChoice(idx int) (tea.Model, tea.Cmd) {
 }
 
 // =============== ORG FETCH ===============
-func (m TuiModel) updateOrgFetch(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m TuiModel) updateOrgFetch(msg tea.Msg) (TuiModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case spinner.TickMsg:
-		var cmd tea.Cmd
-		m.sp, cmd = m.sp.Update(msg)
+		newSpin, cmd := m.sp.Update(msg)
+		m.sp = newSpin
 		return m, cmd
 
 	case orgsMsg:
 		m.orgs = []github.Org(msg)
+		// Build a single select form for the user to pick an org
 		opts := make([]huh.Option[string], 0, len(m.orgs))
 		for _, o := range m.orgs {
 			display := o.Login
@@ -175,48 +203,48 @@ func (m TuiModel) updateOrgFetch(msg tea.Msg) (tea.Model, tea.Cmd) {
 			Title("Select an organization").
 			Options(opts...).
 			Key("selectedOrg")
-		m.orgSelectForm = huh.NewForm(huh.NewGroup(sel))
-		initCmd := m.orgSelectForm.Init()
-
+		orgForm := huh.NewForm(huh.NewGroup(sel))
+		initCmd := orgForm.Init()
+		m.orgSelectForm = orgForm
 		m.state = StateOrgSelect
 		return m, initCmd
 
 	case errMsg:
 		m.message = fmt.Sprintf("Error listing orgs: %v", msg.err)
 		m.state = StateDone
-		return m, nil
 	}
 	return m, nil
 }
 
 // =============== ORG SELECT ===============
-func (m TuiModel) updateOrgSelect(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m TuiModel) updateOrgSelect(msg tea.Msg) (TuiModel, tea.Cmd) {
 	if m.orgSelectForm == nil {
 		return m, nil
 	}
-	formModel, formCmd := m.orgSelectForm.Update(msg)
+	var cmd tea.Cmd
+	formModel, cmd := m.orgSelectForm.Update(msg)
 	if f, ok := formModel.(*huh.Form); ok {
 		m.orgSelectForm = f
-		if m.orgSelectForm.State == huh.StateCompleted {
-			orgChoice := m.orgSelectForm.GetString("selectedOrg")
+		if f.State == huh.StateCompleted {
+			orgChoice := f.GetString("selectedOrg")
 			m.selectedOrg = orgChoice
 			m.state = StateRepoFetch
 			return m, fetchOrgReposCmd(orgChoice)
 		}
 	}
-	return m, formCmd
+	return m, cmd
 }
 
 // =============== REPO FETCH ===============
-func (m TuiModel) updateRepoFetch(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m TuiModel) updateRepoFetch(msg tea.Msg) (TuiModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case spinner.TickMsg:
-		var cmd tea.Cmd
-		m.sp, cmd = m.sp.Update(msg)
+		newSpin, cmd := m.sp.Update(msg)
+		m.sp = newSpin
 		return m, cmd
 
 	case reposMsg:
-		m.repos = []github.Repo(msg)
+		m.repos = msg
 		if len(m.repos) > 500 {
 			m.repos = m.repos[:500]
 		}
@@ -225,29 +253,21 @@ func (m TuiModel) updateRepoFetch(msg tea.Msg) (tea.Model, tea.Cmd) {
 			items = append(items, repoItem{name: r.Name, sshUrl: r.SSHUrl})
 		}
 		m.repoList.SetItems(items)
-		m.repoList.Select(0)
-
-		// Force stable page-size
 		m.repoList.Paginator.PerPage = m.pageSize
 		m.repoList.Paginator.SetTotalPages(len(items))
-
 		m.state = StateRepoList
-		return m, nil
-
 	case errMsg:
 		m.message = fmt.Sprintf("Error fetching repos: %v", msg.err)
 		m.state = StateDone
-		return m, nil
 	}
 	return m, nil
 }
 
 // =============== REPO LIST ===============
-func (m TuiModel) updateRepoList(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var listCmd tea.Cmd
-	m.repoList, listCmd = m.repoList.Update(msg)
+func (m TuiModel) updateRepoList(msg tea.Msg) (TuiModel, tea.Cmd) {
+	newList, listCmd := m.repoList.Update(msg)
+	m.repoList = newList
 
-	// Force stable pagination
 	m.repoList.Paginator.PerPage = m.pageSize
 	cnt := len(m.repoList.Items())
 	m.repoList.Paginator.SetTotalPages(cnt)
@@ -256,21 +276,15 @@ func (m TuiModel) updateRepoList(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.width, m.height = msg.Width, msg.Height
 	case tea.KeyMsg:
-		if key.Matches(msg, m.keys.Quit) {
-			return m, tea.Quit
-		}
 		switch msg.String() {
 		case "?":
 			m.showHelp = !m.showHelp
 			m.repoList.SetShowHelp(m.showHelp)
-			return m, nil
 		case "enter":
-			if selected, ok := m.repoList.SelectedItem().(repoItem); ok {
-				go ghops.CloneRepo(selected.sshUrl, selected.name)
-				m.message = fmt.Sprintf("Cloning %s...", selected.name)
+			if sel, ok := m.repoList.SelectedItem().(repoItem); ok {
+				go ghops.CloneRepo(sel.sshUrl, sel.name)
+				m.message = fmt.Sprintf("Cloning %s...", sel.name)
 				m.state = StateDone
 			}
 		}
@@ -281,8 +295,8 @@ func (m TuiModel) updateRepoList(msg tea.Msg) (tea.Model, tea.Cmd) {
 			for _, r := range m.repos {
 				m.downloadRepos = append(m.downloadRepos, r.Name)
 			}
-			m.done = false
 			m.downloading = true
+			m.done = false
 			m.state = StateDownloading
 
 			cmd := m.progress.SetPercent(0.0)
@@ -290,21 +304,17 @@ func (m TuiModel) updateRepoList(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(cmd, cloneCmd)
 		}
 	}
-
 	return m, listCmd
 }
 
 // =============== DOWNLOADING ===============
-func (m TuiModel) updateDownloading(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m TuiModel) updateDownloading(msg tea.Msg) (TuiModel, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		if key.Matches(msg, m.keys.Quit) {
-			return m, tea.Quit
-		}
 	case spinner.TickMsg:
-		var cmd tea.Cmd
-		m.sp, cmd = m.sp.Update(msg)
+		newSpin, cmd := m.sp.Update(msg)
+		m.sp = newSpin
 		return m, cmd
+
 	case clonedRepoMsg:
 		if m.downloadIndex >= m.downloadTarget-1 {
 			m.done = true
@@ -317,9 +327,10 @@ func (m TuiModel) updateDownloading(msg tea.Msg) (tea.Model, tea.Cmd) {
 		nextRepo := m.downloadRepos[m.downloadIndex]
 		cloneCmd := cloneRepoCmd(nextRepo)
 		return m, tea.Batch(progressCmd, cloneCmd)
+
 	case progress.FrameMsg:
-		newProgress, cmd := m.progress.Update(msg)
-		if np, ok := newProgress.(progress.Model); ok {
+		newProg, cmd := m.progress.Update(msg)
+		if np, ok := newProg.(progress.Model); ok {
 			m.progress = np
 		}
 		return m, cmd
@@ -328,7 +339,7 @@ func (m TuiModel) updateDownloading(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // =============== DONE ===============
-func (m TuiModel) updateDone(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m TuiModel) updateDone(msg tea.Msg) (TuiModel, tea.Cmd) {
 	if _, ok := msg.(tea.KeyMsg); ok {
 		m.state = StateMenu
 		m.message = ""
@@ -336,55 +347,7 @@ func (m TuiModel) updateDone(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// =============== INPUT (HUH FORM) ===============
-func (m TuiModel) updateInput(msg tea.Msg) (tea.Model, tea.Cmd) {
-	// 3) We intercept Ctrl+C or "q" here so we can quit:
-	switch typed := msg.(type) {
-	case tea.KeyMsg:
-		if key.Matches(typed, m.keys.Quit) {
-			return m, tea.Quit
-		}
-	}
-
-	// Let the Huh form handle everything else
-	var cmd tea.Cmd
-	m.inputForm, cmd = m.inputForm.Update(msg)
-
-	// If the Huh form is completed:
-	type formIntf interface {
-		GetString(key string) string
-		State() huh.FormState
-	}
-	if f, ok := m.inputForm.(formIntf); ok && f.State() == huh.StateCompleted {
-		username := f.GetString("username")
-		cmdStr := f.GetString("command")
-
-		if m.operation == "runCommand" {
-			m.command = cmdStr
-		}
-		switch m.operation {
-		case "clonePublic":
-			// user typed a GitHub username -> fetch repos
-			m.state = StateRepoFetch
-			return m, tea.Batch(
-				m.sp.Tick,
-				fetchReposCmd("public", username),
-			)
-		case "setSSH":
-			go ghops.SetSSHRemote(username)
-			m.message = "SSH remote set for all repos."
-			m.state = StateDone
-		case "runCommand":
-			go ghops.RunCommandInAllRepos(m.command)
-			m.message = "Command executed in all repos."
-			m.state = StateDone
-		}
-	}
-	return m, cmd
-}
-
-// fetch commands remain the same:
-
+// =============== FETCH CMDS ===============
 func fetchOrgsCmd() tea.Cmd {
 	return func() tea.Msg {
 		orgs, err := ghops.ListUserOrgs()
@@ -411,12 +374,15 @@ func fetchOrgReposCmd(orgLogin string) tea.Cmd {
 
 func fetchReposCmd(mode, username string) tea.Cmd {
 	return func() tea.Msg {
-		repos, err := func() ([]github.Repo, error) {
-			if mode == "self" {
-				return ghops.ListSelfRepos()
-			}
-			return ghops.ListPublicRepos(username)
-		}()
+		var (
+			repos []github.Repo
+			err   error
+		)
+		if mode == "self" {
+			repos, err = ghops.ListSelfRepos()
+		} else {
+			repos, err = ghops.ListPublicRepos(username)
+		}
 		if err != nil {
 			out, _ := exec.Command("gh", "auth", "status").CombinedOutput()
 			authMsg := strings.TrimSpace(string(out))
@@ -424,11 +390,4 @@ func fetchReposCmd(mode, username string) tea.Cmd {
 		}
 		return reposMsg(repos)
 	}
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }
