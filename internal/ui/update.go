@@ -34,6 +34,8 @@ func multiCloneAllCmd(repos []string) tea.Cmd {
 	return cloneRepoCmd(repos[0])
 }
 
+// =============== MENU ===============
+
 func (m TuiModel) updateMenu(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -41,7 +43,9 @@ func (m TuiModel) updateMenu(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.MouseMsg:
-		if msg.Type == tea.MouseLeft && msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionRelease {
+		if msg.Type == tea.MouseLeft && msg.Button == tea.MouseButtonLeft &&
+			msg.Action == tea.MouseActionRelease {
+			// check all lines
 			for i := range m.menuOptions {
 				lineID := fmt.Sprintf("menu-%d", i)
 				if zone.Get(lineID).InBounds(msg) {
@@ -55,6 +59,7 @@ func (m TuiModel) updateMenu(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if key.Matches(msg, m.keys.Quit) {
 			return m, tea.Quit
 		}
+
 		switch msg.String() {
 		case "?":
 			m.showHelp = !m.showHelp
@@ -74,62 +79,81 @@ func (m TuiModel) updateMenu(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// The user’s choice
 func (m TuiModel) handleMenuChoice(idx int) (tea.Model, tea.Cmd) {
 	switch m.menuOptions[idx] {
 	case "Clone Own Repos":
 		m.operation = "cloneOwn"
 		m.state = StateRepoFetch
-		return m, fetchReposCmd("self", "")
-
+		return m, tea.Batch(
+			m.sp.Tick,                 // ensures the spinner is advanced
+			fetchReposCmd("self", ""), // triggers the GH fetch
+		)
 	case "Clone Public Repos":
 		m.operation = "clonePublic"
-		// Show a Huh form: "Enter GitHub Username"
-		m.inputForm = huh.NewForm(
-			huh.NewGroup(
-				huh.NewInput().
-					Title("Enter GitHub Username").
-					Key("username"),
-			),
-		)
+		// Validate that user typed a non-empty GitHub username:
+		selectField := huh.NewInput().
+			Title("Enter GitHub Username").
+			Key("username").
+			Validate(func(val string) error {
+				if strings.TrimSpace(val) == "" {
+					return fmt.Errorf("Username cannot be empty")
+				}
+				return nil
+			})
+
+		form := huh.NewForm(huh.NewGroup(selectField))
+		m.inputForm = form
+		initCmd := m.inputForm.Init()
 		m.state = StateInput
-		return m, nil
+		return m, initCmd
 
 	case "Clone Repos from an Org":
 		m.operation = "cloneOrg"
 		m.state = StateOrgFetch
-		return m, fetchOrgsCmd()
+		return m, tea.Batch(
+			m.sp.Tick, // ensures the spinner is advanced
+			fetchOrgsCmd(),
+		)
 
 	case "Run Command in All Repos":
 		m.operation = "runCommand"
-		m.inputForm = huh.NewForm(
-			huh.NewGroup(
-				huh.NewInput().
-					Title("Enter command").
-					Key("command"),
-			),
-		)
+		cmdField := huh.NewInput().
+			Title("Enter command").
+			Key("command").
+			Validate(func(val string) error {
+				if len(strings.TrimSpace(val)) == 0 {
+					return fmt.Errorf("Command cannot be empty")
+				}
+				return nil
+			})
+
+		form := huh.NewForm(huh.NewGroup(cmdField))
+		m.inputForm = form
+		initCmd := m.inputForm.Init()
 		m.state = StateInput
-		return m, nil
+		return m, initCmd
 
 	case "Set SSH Remote":
 		m.operation = "setSSH"
-		m.inputForm = huh.NewForm(
-			huh.NewGroup(
-				huh.NewInput().
-					Title("Enter GitHub Username").
-					Key("username"),
-			),
-		)
+		form := huh.NewForm(huh.NewGroup(
+			huh.NewInput().
+				Title("Enter GitHub Username").
+				Key("username"),
+		))
+		m.inputForm = form
+		initCmd := m.inputForm.Init()
+
 		m.state = StateInput
-		return m, nil
+		return m, initCmd
 
 	case "Exit":
 		return m, tea.Quit
 	}
-
 	return m, nil
 }
 
+// =============== ORG FETCH ===============
 func (m TuiModel) updateOrgFetch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case spinner.TickMsg:
@@ -152,8 +176,10 @@ func (m TuiModel) updateOrgFetch(msg tea.Msg) (tea.Model, tea.Cmd) {
 			Options(opts...).
 			Key("selectedOrg")
 		m.orgSelectForm = huh.NewForm(huh.NewGroup(sel))
+		initCmd := m.orgSelectForm.Init()
+
 		m.state = StateOrgSelect
-		return m, nil
+		return m, initCmd
 
 	case errMsg:
 		m.message = fmt.Sprintf("Error listing orgs: %v", msg.err)
@@ -163,11 +189,11 @@ func (m TuiModel) updateOrgFetch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// =============== ORG SELECT ===============
 func (m TuiModel) updateOrgSelect(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.orgSelectForm == nil {
 		return m, nil
 	}
-
 	formModel, formCmd := m.orgSelectForm.Update(msg)
 	if f, ok := formModel.(*huh.Form); ok {
 		m.orgSelectForm = f
@@ -181,6 +207,7 @@ func (m TuiModel) updateOrgSelect(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, formCmd
 }
 
+// =============== REPO FETCH ===============
 func (m TuiModel) updateRepoFetch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case spinner.TickMsg:
@@ -193,7 +220,6 @@ func (m TuiModel) updateRepoFetch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(m.repos) > 500 {
 			m.repos = m.repos[:500]
 		}
-
 		items := make([]list.Item, 0, len(m.repos))
 		for _, r := range m.repos {
 			items = append(items, repoItem{name: r.Name, sshUrl: r.SSHUrl})
@@ -201,7 +227,7 @@ func (m TuiModel) updateRepoFetch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.repoList.SetItems(items)
 		m.repoList.Select(0)
 
-		// Force stable page-size:
+		// Force stable page-size
 		m.repoList.Paginator.PerPage = m.pageSize
 		m.repoList.Paginator.SetTotalPages(len(items))
 
@@ -216,11 +242,12 @@ func (m TuiModel) updateRepoFetch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// =============== REPO LIST ===============
 func (m TuiModel) updateRepoList(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var listCmd tea.Cmd
 	m.repoList, listCmd = m.repoList.Update(msg)
 
-	// Force stable pagination after library tries dynamic logic
+	// Force stable pagination
 	m.repoList.Paginator.PerPage = m.pageSize
 	cnt := len(m.repoList.Items())
 	m.repoList.Paginator.SetTotalPages(cnt)
@@ -242,14 +269,12 @@ func (m TuiModel) updateRepoList(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "enter":
 			if selected, ok := m.repoList.SelectedItem().(repoItem); ok {
-				// single clone
 				go ghops.CloneRepo(selected.sshUrl, selected.name)
 				m.message = fmt.Sprintf("Cloning %s...", selected.name)
 				m.state = StateDone
 			}
 		}
 		if key.Matches(msg, m.keys.CloneAll) {
-			// multi clones
 			m.downloadIndex = 0
 			m.downloadTarget = len(m.repos)
 			m.downloadRepos = make([]string, 0, m.downloadTarget)
@@ -269,6 +294,7 @@ func (m TuiModel) updateRepoList(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, listCmd
 }
 
+// =============== DOWNLOADING ===============
 func (m TuiModel) updateDownloading(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -301,6 +327,7 @@ func (m TuiModel) updateDownloading(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// =============== DONE ===============
 func (m TuiModel) updateDone(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if _, ok := msg.(tea.KeyMsg); ok {
 		m.state = StateMenu
@@ -309,15 +336,25 @@ func (m TuiModel) updateDone(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// =============== INPUT (HUH FORM) ===============
 func (m TuiModel) updateInput(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// 3) We intercept Ctrl+C or "q" here so we can quit:
+	switch typed := msg.(type) {
+	case tea.KeyMsg:
+		if key.Matches(typed, m.keys.Quit) {
+			return m, tea.Quit
+		}
+	}
+
+	// Let the Huh form handle everything else
 	var cmd tea.Cmd
 	m.inputForm, cmd = m.inputForm.Update(msg)
 
+	// If the Huh form is completed:
 	type formIntf interface {
 		GetString(key string) string
 		State() huh.FormState
 	}
-
 	if f, ok := m.inputForm.(formIntf); ok && f.State() == huh.StateCompleted {
 		username := f.GetString("username")
 		cmdStr := f.GetString("command")
@@ -327,9 +364,12 @@ func (m TuiModel) updateInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch m.operation {
 		case "clonePublic":
-			// Example: user typed a GitHub username -> fetch their repos
+			// user typed a GitHub username -> fetch repos
 			m.state = StateRepoFetch
-			return m, fetchReposCmd("public", username)
+			return m, tea.Batch(
+				m.sp.Tick,
+				fetchReposCmd("public", username),
+			)
 		case "setSSH":
 			go ghops.SetSSHRemote(username)
 			m.message = "SSH remote set for all repos."
@@ -343,7 +383,8 @@ func (m TuiModel) updateInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// fetch commands
+// fetch commands remain the same:
+
 func fetchOrgsCmd() tea.Cmd {
 	return func() tea.Msg {
 		orgs, err := ghops.ListUserOrgs()
