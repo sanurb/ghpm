@@ -10,15 +10,14 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
-	zone "github.com/lrstanley/bubblezone" // bubblezone
+	zone "github.com/lrstanley/bubblezone"
 
 	"github.com/sanurb/ghpm/internal/github"
 )
 
 // States
 const (
-	StateWelcome = iota
-	StateMenu
+	StateMenu = iota
 	StateOrgFetch
 	StateOrgSelect
 	StateRepoFetch
@@ -37,7 +36,6 @@ type (
 
 func (e errMsg) Error() string { return e.err.Error() }
 
-// Your item for the Bubble Tea list
 type repoItem struct {
 	name   string
 	sshUrl string
@@ -85,7 +83,7 @@ type TuiModel struct {
 	menuOptions []string
 	menuCursor  int
 
-	repoList list.Model // from bubbletea/bubbles
+	repoList list.Model
 	repos    []github.Repo
 
 	operation   string
@@ -111,11 +109,10 @@ type TuiModel struct {
 	width    int
 	height   int
 	showHelp bool
-
-	pageSize int // param for stable items/page
+	pageSize int
 }
 
-// NewTuiModel is your entry. "perPage" is user-supplied, e.g. 10
+// NewTuiModel sets up spinner, help, and the list with per-page
 func NewTuiModel(perPage int) TuiModel {
 	sp := spinner.New()
 	sp.Style = DownloadSpinnerStyle
@@ -129,14 +126,12 @@ func NewTuiModel(perPage int) TuiModel {
 		"Exit",
 	}
 
-	// Create the official list Model
 	repoList := list.New(nil, list.NewDefaultDelegate(), 50, 10)
 	repoList.Title = "Repositories"
 	repoList.SetFilteringEnabled(true)
 	repoList.SetShowHelp(true)
 	repoList.SetShowStatusBar(false)
 	repoList.SetShowPagination(true)
-	// We'll forcibly fix the page size after the library tries to recalc, so:
 	repoList.Paginator.PerPage = perPage
 
 	p := progress.New(
@@ -146,7 +141,8 @@ func NewTuiModel(perPage int) TuiModel {
 	)
 
 	return TuiModel{
-		state:       StateWelcome,
+		state: StateMenu,
+
 		sp:          sp,
 		menuOptions: menu,
 		repoList:    repoList,
@@ -157,16 +153,14 @@ func NewTuiModel(perPage int) TuiModel {
 	}
 }
 
-// Init starts your spinner
+// Init starts the spinner
 func (m TuiModel) Init() tea.Cmd {
 	return tea.Batch(m.sp.Tick)
 }
 
-// Update references your specialized update methods in update.go
+// Update delegates to specialized update methods
 func (m TuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch m.state {
-	case StateWelcome:
-		return m.updateWelcome(msg)
 	case StateMenu:
 		return m.updateMenu(msg)
 	case StateOrgFetch:
@@ -187,14 +181,12 @@ func (m TuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// The final view: we wrap the result in zone.Scan() for bubblezone
 func (m TuiModel) View() string {
 	var out string
+
 	switch m.state {
-	case StateWelcome:
-		out = m.renderWelcome()
 	case StateMenu:
-		out = m.renderMenu()
+		out = m.renderWelcomeAndMenu()
 	case StateOrgFetch:
 		out = fmt.Sprintf("Fetching organizations... %s", m.sp.View())
 	case StateOrgSelect:
@@ -212,26 +204,20 @@ func (m TuiModel) View() string {
 	case StateDone:
 		out = m.message + "\nPress any key to return to menu."
 	case StateInput:
-		out = "Input:\n" + m.inputForm.View()
+		out = m.inputForm.View()
 	default:
 		out = "(unknown state)"
 	}
 
-	// bubblezone strips zero-width markers
+	// Remove zone markers
 	return zone.Scan(out)
 }
 
-func (m TuiModel) renderWelcome() string {
-	boxContent := "Welcome to GHPM!\n\n" +
-		"Manage GitHub repositories, clone your org repos,\n" +
-		"run commands across all repos, and configure SSH remotes.\n\n" +
-		"Press any key to begin."
-	return WelcomeBoxStyle.Render(boxContent)
-}
+func (m TuiModel) renderWelcomeAndMenu() string {
+	welcome := "Welcome to GHPM!\n\nManage GitHub repositories, clone your org repos,\n" +
+		"run commands across all repos, and configure SSH remotes.\n"
 
-// We'll bubblezone-mark each line so we can detect mouse clicks
-func (m TuiModel) renderMenu() string {
-	view := "Select an option:\n\n"
+	menu := "Select an option:\n\n"
 	for i, option := range m.menuOptions {
 		cursor := "  "
 		if i == m.menuCursor {
@@ -239,9 +225,10 @@ func (m TuiModel) renderMenu() string {
 		}
 		lineID := fmt.Sprintf("menu-%d", i)
 		marked := zone.Mark(lineID, fmt.Sprintf("%s%s", cursor, option))
-		view += marked + "\n"
+		menu += marked + "\n"
 	}
-	return view
+
+	return WelcomeBoxStyle.Render(welcome) + "\n\n" + menu
 }
 
 func (m TuiModel) renderDownloading() string {
